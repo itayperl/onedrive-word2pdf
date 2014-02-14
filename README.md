@@ -22,6 +22,6 @@ Installation
 
 Usage
 -----
-* Run `word2pdf --help' for CLI usage.
+* Run `word2pdf --help` for CLI usage.
 
-TODO: Rewrite using PhantomJS once file download is supported (https://github.com/ariya/phantomjs/issues/10052).
+TODO: Rewrite using PhantomJS once [file download is supported](https://github.com/ariya/phantomjs/issues/10052).
