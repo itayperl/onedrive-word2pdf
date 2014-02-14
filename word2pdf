@@ -1,0 +1,161 @@
+#!/usr/bin/env python
+from gi.repository import WebKit, Gtk, Soup, GLib
+import os
+import sys
+import re
+import urlparse
+import urllib
+import argparse
+from skydrive.api_v5 import PersistentSkyDriveAPI
+
+class PDFDownloadHandler(object):
+    PDF_REQUEST_FMT = 'https://word-view.officeapps.live.com/wv/WordViewer/request.pdf?Fi={0[Fi]}&C={0[C]}&ak={0[ak]}&z=1&type=printpdf'
+    def __init__(self, view, output_dir):
+        self.view = view
+        self.output_dir = output_dir
+        self.docs = None
+
+        view.connect('download-requested', self._on_download_request)
+        view.connect('notify::load-status', self._on_status_change)
+        view.connect('navigation-policy-decision-requested', self._on_policy_decision_request)
+
+    def start(self, api, filemap):
+        self.docs = filemap
+        self._download_next()
+
+    def _on_policy_decision_request(self, view, frame, request, nav_action, policy_decision):
+        # Force WebKit to download the PDF URL (otherwise it would fail
+        # with WEBKIT_POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE).
+        if 'WordViewer/request.pdf' in request.get_uri():
+            policy_decision.download()
+            return True
+        return False
+
+    def _download_next(self):
+        if len(self.docs) == 0:
+            Gtk.main_quit()
+            return
+
+        self.name, url = self.docs.popitem()
+        self.attempts = 3
+        self.view.load_uri(url)
+
+    def _on_status_change(self, view, prop):
+        status = view.get_load_status()
+        if status != WebKit.LoadStatus.FINISHED:
+            return
+
+        dom = view.get_dom_document()
+        sdx = dom.get_element_by_id('sdx_ow_iframe')
+        if sdx is None:
+            return
+
+        query = urlparse.urlparse(sdx.get_src()).query.split('&')
+        params = dict(q.split('=') for q in query)
+        pdf_url = self.PDF_REQUEST_FMT.format(params)
+        self.view.load_uri(pdf_url)
+
+    def _on_download_state_change(self, download, prop):
+        status = download.get_status()
+        if status == WebKit.DownloadStatus.STARTED:
+            print 'Download started (%s).' % (self.name, )
+        elif status == WebKit.DownloadStatus.ERROR:
+            print 'Download failed (%s).' % (self.name, )
+        elif status == WebKit.DownloadStatus.FINISHED:
+            response = download.get_network_response()
+            message = response.get_message()
+            print 'Download of "%s" finished with status %s.' % (self.name, message.status_code, )
+            self.view.stop_loading()
+            # FIXME Large PDFs will take some time to prepare...
+            #       Possibly, reloading the document is not required: just wait for
+            #       a bit and request the PDF again.
+            if open(self.dest_file, 'rb').read(8) == '\xef\xbb\xbf<?xml' and self.attempts > 0:
+                print ' retrying (PDF preparation in progress...)'
+                # If the dest file already exists, WebKit will create a backup (dest_file~)
+                os.remove(self.dest_file)
+                self.attempts -= 1
+                self.view.reload()
+            else:
+                self._download_next()
+
+    def _on_download_request(self, view, download):
+        self.dest_file = os.path.abspath(os.path.join(self.output_dir, '%s.pdf' % (self.name, )))
+        download.set_destination_uri(urlparse.urljoin('file:', urllib.pathname2url(self.dest_file)))
+        download.connect('notify::status', self._on_download_state_change)
+        return True
+
+def cleanup(api):
+    for fileinfo in api.listdir():
+        if fileinfo['name'].startswith('word2pdf_'):
+            api.delete(fileinfo['id'])
+
+def get_config_dir():
+    config_dir = os.path.join(GLib.get_user_config_dir(), 'word2pdf')
+    if not os.path.isdir(config_dir):
+        os.makedirs(config_dir)
+    return config_dir
+
+def create_webview(show=False):
+    window = Gtk.Window()
+
+    cookie_jar = Soup.CookieJarText.new(os.path.join(get_config_dir(), 'cookies.txt'), False)
+    session = WebKit.get_default_session()
+    session.add_feature(cookie_jar)
+
+    view = WebKit.WebView()
+    window.connect('destroy', Gtk.main_quit)
+    window.add(view)
+
+    # XXX Note that some assertion failure messages will be printed if the
+    #     window is not shown. Apparently they are harmless.
+    if show:
+        window.show_all()
+
+    return view
+
+def login():
+    view = create_webview(show=True)
+    view.load_uri('https://www.skydrive.com')
+    Gtk.main()
+
+def download_all(output_dir, files, show=False):
+    view = create_webview()
+    api = PersistentSkyDriveAPI.from_conf()
+
+    cleanup(api)
+
+    filemap = {}
+    for i, filepath in enumerate(set(files)):
+        _, ext = os.path.splitext(filepath)
+        if ext not in ('.doc', '.docx'):
+            print >>sys.stderr, 'Skipping file with unknown extension: "%s"' % (filepath, )
+
+        upload_name = 'word2pdf_%04d%s' % (i, ext)
+        with open(filepath, 'rb') as f:
+            result = api.put((upload_name, f))
+        link = api.info(result['id'])['link']
+
+        filemap[filepath] = link
+
+    handler = PDFDownloadHandler(view, output_dir)
+    handler.start(api, filemap)
+
+    Gtk.main()
+
+    cleanup(api)
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-l', '--log-in', help='Show browser for manual log in', action='store_true')
+    parser.add_argument('-o', '--output-dir', help='Directory for the output files (defaults to working directory)', default = '.')
+    parser.add_argument('files', nargs='*',  help='Files to upload (an empty list will only perform clean-up)')
+    args = parser.parse_args()
+
+    if args.log_in:
+        login()
+
+    if len(args.files) > 0:
+        download_all(args.output_dir, args.files)
+
+if __name__ == '__main__':
+    main()
