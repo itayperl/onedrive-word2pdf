@@ -10,9 +10,8 @@ from skydrive.api_v5 import PersistentSkyDriveAPI
 
 class PDFDownloadHandler(object):
     PDF_REQUEST_FMT = 'https://word-view.officeapps.live.com/wv/WordViewer/request.pdf?Fi={0[Fi]}&C={0[C]}&ak={0[ak]}&z=1&type=printpdf'
-    def __init__(self, view, output_dir):
+    def __init__(self, view):
         self.view = view
-        self.output_dir = output_dir
         self.docs = None
 
         view.connect('download-requested', self._on_download_request)
@@ -36,7 +35,7 @@ class PDFDownloadHandler(object):
             Gtk.main_quit()
             return
 
-        self.name, url = self.docs.popitem()
+        self.file_path, url = self.docs.popitem()
         self.attempts = 3
         self.view.load_uri(url)
 
@@ -58,14 +57,15 @@ class PDFDownloadHandler(object):
     def _on_download_state_change(self, download, prop):
         status = download.get_status()
         if status == WebKit.DownloadStatus.STARTED:
-            print 'Download started (%s).' % (self.name, )
+            print 'Download started (%s).' % (self.file_path, )
         elif status == WebKit.DownloadStatus.ERROR:
-            print 'Download failed (%s).' % (self.name, )
+            print 'Download failed (%s).' % (self.file_path, )
         elif status == WebKit.DownloadStatus.FINISHED:
             response = download.get_network_response()
             message = response.get_message()
-            print 'Download of "%s" finished with status %s.' % (self.name, message.status_code, )
+            print 'Download of "%s" finished with status %s.' % (self.file_path, message.status_code, )
             self.view.stop_loading()
+
             # FIXME Large PDFs will take some time to prepare...
             #       Possibly, reloading the document is not required: just wait for
             #       a bit and request the PDF again.
@@ -79,7 +79,7 @@ class PDFDownloadHandler(object):
                 self._download_next()
 
     def _on_download_request(self, view, download):
-        self.dest_file = os.path.abspath(os.path.join(self.output_dir, '%s.pdf' % (self.name, )))
+        self.dest_file = os.path.abspath('%s.pdf' % (self.file_path, ))
         download.set_destination_uri(urlparse.urljoin('file:', urllib.pathname2url(self.dest_file)))
         download.connect('notify::status', self._on_download_state_change)
         return True
@@ -118,7 +118,7 @@ def login():
     view.load_uri('https://www.skydrive.com')
     Gtk.main()
 
-def download_all(output_dir, files, show=False):
+def convert(files, show=False):
     view = create_webview()
     api = PersistentSkyDriveAPI.from_conf()
 
@@ -137,7 +137,7 @@ def download_all(output_dir, files, show=False):
 
         filemap[filepath] = link
 
-    handler = PDFDownloadHandler(view, output_dir)
+    handler = PDFDownloadHandler(view)
     handler.start(api, filemap)
 
     Gtk.main()
@@ -147,15 +147,14 @@ def download_all(output_dir, files, show=False):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-l', '--log-in', help='Show browser for manual log in', action='store_true')
-    parser.add_argument('-o', '--output-dir', help='Directory for the output files (defaults to working directory)', default = '.')
-    parser.add_argument('files', nargs='*',  help='Files to upload (an empty list will only perform clean-up)')
+    parser.add_argument('files', nargs='*',  help='Files to convert')
     args = parser.parse_args()
 
     if args.log_in:
         login()
 
     if len(args.files) > 0:
-        download_all(args.output_dir, args.files)
+        convert(args.files)
 
 if __name__ == '__main__':
     main()
