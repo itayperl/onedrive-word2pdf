@@ -6,10 +6,12 @@ import re
 import urlparse
 import urllib
 import argparse
-from skydrive.api_v5 import PersistentSkyDriveAPI
+from onedrive.api_v5 import PersistentOneDriveAPI
+
+# Useful doc: https://lazka.github.io/pgi-docs/WebKit-3.0/classes/DOMElement.html
 
 class PDFDownloadHandler(object):
-    PDF_REQUEST_FMT = 'https://word-view.officeapps.live.com/wv/WordViewer/request.pdf?Fi={0[Fi]}&C={0[C]}&ak={0[ak]}&z=1&type=printpdf'
+    PDF_REQUEST_FMT = 'https://word-view.officeapps.live.com/wv/WordViewer/request.pdf?Fi={0[Fi]}&C={0[C]}&ak={0[ak]}&z=256&type=downloadpdf'
     def __init__(self, view):
         self.view = view
         self.docs = None
@@ -45,12 +47,26 @@ class PDFDownloadHandler(object):
             return
 
         dom = view.get_dom_document()
-        sdx = dom.get_element_by_id('sdx_ow_iframe')
-        if sdx is None:
+        form = dom.get_element_by_id('sdx_ow_iframe_loader')
+        if form is None:
             return
 
-        query = urlparse.urlparse(sdx.get_src()).query.split('&')
+        # Collect GET parameters required for the PDF request.
+        # - GET parameters of the sdx_ow_iframe_loader form action
+        # - Hidden <input>s inside the form
+
+        query = urlparse.urlparse(form.get_action()).query.split('&')
         params = dict(q.split('=') for q in query)
+
+        child = form.get_first_element_child()
+        while child:
+            if (child.get_tag_name().lower() == 'input' and
+                child.get_attribute('type').lower() == 'hidden'):
+                name = child.get_attribute('name')
+                value = child.get_attribute('value')
+                params[name] = urllib.quote(value)
+            child = child.get_next_element_sibling()
+
         pdf_url = self.PDF_REQUEST_FMT.format(params)
         self.view.load_uri(pdf_url)
 
@@ -115,12 +131,12 @@ def create_webview(show=False):
 
 def login():
     view = create_webview(show=True)
-    view.load_uri('https://www.skydrive.com')
+    view.load_uri('https://www.onedrive.com')
     Gtk.main()
 
 def convert(files, show=False):
     view = create_webview()
-    api = PersistentSkyDriveAPI.from_conf()
+    api = PersistentOneDriveAPI.from_conf()
 
     cleanup(api)
 
