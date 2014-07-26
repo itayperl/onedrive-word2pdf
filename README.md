@@ -17,7 +17,7 @@ Installation
 ------------
 * Configure python-onedrive according to the [instructions](https://pypi.python.org/pypi/python-onedrive/#command-line-usage). You'll have to create a LiveConnect application [here](https://account.live.com/developers/applications).
 * Run `word2pdf -l`. It will display a browser window and ask you to log-in to
-  Skydrive. Tick 'Keep me signed in' so you don't have to do this every time:
+  OneDrive. Tick 'Keep me signed in' so you don't have to do this every time:
   the cookies will be saved.
 
 Usage
